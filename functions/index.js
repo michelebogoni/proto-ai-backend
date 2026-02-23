@@ -1,32 +1,261 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * const {onCall} = require("firebase-functions/v2/https");
- * const {onDocumentWritten} = require("firebase-functions/v2/firestore");
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
-
-const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/https");
+const {setGlobalOptions} = require("firebase-functions/v2");
+const {onRequest} = require("firebase-functions/v2/https");
+const {onSchedule} = require("firebase-functions/v2/scheduler");
 const logger = require("firebase-functions/logger");
+const Anthropic = require("@anthropic-ai/sdk");
+const {google} = require("googleapis");
+const fs = require("fs");
+const path = require("path");
 
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
-setGlobalOptions({ maxInstances: 10 });
+setGlobalOptions({maxInstances: 10, region: "europe-west1"});
 
-// Create and deploy your first functions
-// https://firebase.google.com/docs/functions/get-started
+// --- CORS ---
+const ALLOWED_ORIGINS = [
+  "https://gonexo.site",
+  "https://www.gonexo.site",
+  "http://localhost:3000",
+];
 
-// exports.helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+/**
+ * Gestisce le intestazioni CORS.
+ * Restituisce true se la richiesta è un preflight OPTIONS (già gestito).
+ */
+function handleCors(req, res) {
+  const origin = req.headers.origin;
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.set("Access-Control-Allow-Origin", origin);
+  }
+  res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type");
+  res.set("Access-Control-Max-Age", "3600");
+
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return true;
+  }
+  return false;
+}
+
+// --- System Prompt (caricato una sola volta per istanza) ---
+let cachedSystemPrompt = null;
+
+function getSystemPrompt() {
+  if (!cachedSystemPrompt) {
+    const promptPath = path.join(__dirname, "system-prompt.txt");
+    cachedSystemPrompt = fs.readFileSync(promptPath, "utf8");
+  }
+  return cachedSystemPrompt;
+}
+
+// --- CHAT FUNCTION ---
+exports.chat = onRequest(
+    {
+      memory: "512MiB",
+      timeoutSeconds: 120,
+      secrets: ["ANTHROPIC_API_KEY"],
+    },
+    async (req, res) => {
+      if (handleCors(req, res)) return;
+
+      // Health check per keepAlive
+      if (req.method === "GET") {
+        res.status(200).json({status: "ok"});
+        return;
+      }
+
+      if (req.method !== "POST") {
+        res.status(405).json({error: "Metodo non consentito"});
+        return;
+      }
+
+      const {sessionId, message, history} = req.body;
+
+      if (!message) {
+        res.status(400).json({error: "Il campo 'message' è obbligatorio"});
+        return;
+      }
+
+      try {
+        const anthropic = new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY,
+        });
+
+        // Costruisce l'array dei messaggi: history pregressa + nuovo messaggio
+        const messages = [];
+        if (Array.isArray(history)) {
+          for (const msg of history) {
+            messages.push({role: msg.role, content: msg.content});
+          }
+        }
+        messages.push({role: "user", content: message});
+
+        logger.info("Chat request", {sessionId, messageCount: messages.length});
+
+        // SSE headers
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+
+        // Streaming con Anthropic SDK
+        const stream = anthropic.messages.stream({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1024,
+          system: getSystemPrompt(),
+          messages,
+        });
+
+        stream.on("text", (text) => {
+          const payload = JSON.stringify({type: "text", content: text});
+          res.write(`data: ${payload}\n\n`);
+        });
+
+        stream.on("end", () => {
+          res.write(`data: ${JSON.stringify({type: "done"})}\n\n`);
+          res.end();
+        });
+
+        stream.on("error", (err) => {
+          logger.error("Errore streaming Anthropic", err);
+          const errMsg = "Si è verificato un errore. Riprova tra qualche istante.";
+          const payload = JSON.stringify({type: "error", content: errMsg});
+          res.write(`data: ${payload}\n\n`);
+          res.end();
+        });
+      } catch (err) {
+        logger.error("Errore nella funzione chat", err);
+
+        // Se gli header SSE sono già stati inviati, chiudi lo stream
+        if (res.headersSent) {
+          const errMsg = "Si è verificato un errore. Riprova tra qualche istante.";
+          const payload = JSON.stringify({type: "error", content: errMsg});
+          res.write(`data: ${payload}\n\n`);
+          res.end();
+        } else {
+          res.status(500).json({
+            error: "Si è verificato un errore. Riprova tra qualche istante.",
+          });
+        }
+      }
+    },
+);
+
+// --- LEAD FUNCTION ---
+exports.lead = onRequest(
+    {
+      memory: "256MiB",
+      timeoutSeconds: 30,
+      secrets: ["GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SHEET_ID"],
+    },
+    async (req, res) => {
+      try {
+        if (handleCors(req, res)) return;
+
+        if (req.method !== "POST") {
+          res.status(405).json({error: "Metodo non consentito"});
+          return;
+        }
+
+        const {nome, email, telefono, descrizioneProgetto, conversazione} =
+          req.body || {};
+
+        if (!nome || !email) {
+          res.status(400).json({error: "Nome ed email sono obbligatori"});
+          return;
+        }
+
+        logger.info("Nuovo lead ricevuto", {nome, email});
+
+        try {
+          // Parsing credenziali service account
+          const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
+          const credentials = JSON.parse(raw);
+
+          const auth = new google.auth.GoogleAuth({
+            credentials,
+            scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+          });
+
+          const sheets = google.sheets({version: "v4", auth});
+          const sheetId = process.env.GOOGLE_SHEET_ID;
+
+          // Formatta la conversazione come testo leggibile
+          let conversazioneText = "";
+          if (Array.isArray(conversazione)) {
+            conversazioneText = conversazione
+                .map((msg) => {
+                  const ruolo =
+                    msg.role === "user" ? "Utente" : "Proto AI";
+                  return `${ruolo}: ${msg.content}`;
+                })
+                .join("\n\n");
+          } else if (typeof conversazione === "string") {
+            conversazioneText = conversazione;
+          }
+
+          const row = [
+            new Date().toISOString(),
+            nome,
+            email,
+            telefono || "",
+            descrizioneProgetto || "",
+            conversazioneText,
+          ];
+
+          await sheets.spreadsheets.values.append({
+            spreadsheetId: sheetId,
+            range: "A:F",
+            valueInputOption: "USER_ENTERED",
+            requestBody: {
+              values: [row],
+            },
+          });
+
+          logger.info("Lead salvato su Google Sheet", {nome, email});
+        } catch (sheetErr) {
+          logger.error("Errore salvataggio su Google Sheet", {
+            message: sheetErr.message,
+            stack: sheetErr.stack,
+          });
+        }
+
+        // Restituisci sempre 200
+        res.status(200).json({
+          success: true,
+          message: "Grazie! Il team ti contatterà entro 24 ore.",
+        });
+      } catch (outerErr) {
+        logger.error("Errore critico nella funzione lead", {
+          message: outerErr.message,
+          stack: outerErr.stack,
+        });
+        res.status(200).json({
+          success: true,
+          message: "Grazie! Il team ti contatterà entro 24 ore.",
+        });
+      }
+    },
+);
+
+// --- KEEP ALIVE FUNCTION ---
+exports.keepAlive = onSchedule(
+    {
+      schedule: "*/5 * * * *",
+      region: "europe-west1",
+      timeoutSeconds: 30,
+    },
+    async () => {
+      try {
+        const chatUrl = process.env.CHAT_FUNCTION_URL;
+        if (!chatUrl) {
+          logger.warn("CHAT_FUNCTION_URL non configurata, skip keep-alive");
+          return;
+        }
+
+        const response = await fetch(chatUrl, {method: "GET"});
+
+        logger.info("Keep-alive eseguito", {status: response.status});
+      } catch (err) {
+        logger.warn("Keep-alive fallito", err);
+      }
+    },
+);
