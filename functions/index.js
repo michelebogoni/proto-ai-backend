@@ -184,7 +184,7 @@ exports.lead = onRequest(
             conversazioneText = conversazione
                 .map((msg) => {
                   const ruolo =
-                    msg.role === "user" ? "Utente" : "Proto AI";
+                    msg.role === "user" ? "Utente" : "Spark";
                   return `${ruolo}: ${msg.content}`;
                 })
                 .join("\n\n");

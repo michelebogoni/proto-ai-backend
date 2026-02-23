@@ -1,4 +1,19 @@
-<style>
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spark - Test Widget</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #F8FAFC; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+    .container { width: 100%; max-width: 500px; height: 700px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <style>
   .proto-ai-widget {
     width: 100%;
     height: 100%;
@@ -275,7 +290,7 @@
                 setStreaming(false);
                 return;
               }
-            } catch (e) { /* skip malformed SSE */ }
+            } catch (e) {}
           }
 
           return read();
@@ -328,7 +343,7 @@
           descrizioneProgetto: "Da qualificare",
           conversazione: history
         })
-      }).catch(function() { /* silenzioso */ });
+      }).catch(function() {});
     }
   }
 
@@ -357,3 +372,6 @@
   inputEl.focus();
 })();
 </script>
+  </div>
+</body>
+</html>

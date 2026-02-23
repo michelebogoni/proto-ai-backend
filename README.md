@@ -1,6 +1,6 @@
-# Proto AI — Backend
+# Spark — Backend
 
-Backend Firebase per Proto AI, il chatbot commerciale di [Nexo](https://gonexo.site).
+Backend Firebase per Spark, il chatbot commerciale di [Nexo](https://gonexo.site).
 
 ## Architettura
 
