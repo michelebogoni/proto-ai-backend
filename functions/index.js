@@ -103,7 +103,7 @@ exports.chat = onRequest(
         // Streaming con Anthropic SDK
         const stream = anthropic.messages.stream({
           model: "claude-sonnet-4-20250514",
-          max_tokens: 1024,
+          max_tokens: 1500,
           system: getSystemPrompt(),
           messages,
         });
@@ -162,12 +162,12 @@ exports.lead = onRequest(
         const {nome, email, telefono, descrizioneProgetto, conversazione} =
           req.body || {};
 
-        if (!nome || !email) {
-          res.status(400).json({error: "Nome ed email sono obbligatori"});
+        if (!telefono) {
+          res.status(400).json({error: "Il numero di telefono è obbligatorio"});
           return;
         }
 
-        logger.info("Nuovo lead ricevuto", {nome, email});
+        logger.info("Nuovo lead ricevuto", {telefono, nome: nome || "N/A", email: email || "N/A"});
 
         try {
           // Parsing credenziali service account
