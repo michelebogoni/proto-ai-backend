@@ -159,15 +159,22 @@ exports.lead = onRequest(
           return;
         }
 
-        const {nome, email, telefono, descrizioneProgetto, conversazione} =
-          req.body || {};
+        const {nome, email, telefono, nomeAzienda, descrizioneProgetto,
+          preventivoIndicato, probabilitaChiusura, noteQualifica,
+          conversazione} = req.body || {};
 
         if (!telefono) {
           res.status(400).json({error: "Il numero di telefono è obbligatorio"});
           return;
         }
 
-        logger.info("Nuovo lead ricevuto", {telefono, nome: nome || "N/A", email: email || "N/A"});
+        logger.info("Nuovo lead ricevuto", {
+          telefono,
+          nome: nome || "N/A",
+          email: email || "N/A",
+          nomeAzienda: nomeAzienda || "N/A",
+          probabilitaChiusura: probabilitaChiusura || 0,
+        });
 
         try {
           // Parsing credenziali service account
@@ -191,23 +198,32 @@ exports.lead = onRequest(
                     msg.role === "user" ? "Utente" : "Spark";
                   return `${ruolo}: ${msg.content}`;
                 })
-                .join("\n\n");
+                .join(" | ");
           } else if (typeof conversazione === "string") {
             conversazioneText = conversazione;
           }
 
+          // Colore scoring
+          let coloreScoring = "🔴";
+          if (probabilitaChiusura >= 60) coloreScoring = "🟢";
+          else if (probabilitaChiusura >= 30) coloreScoring = "🟠";
+
           const row = [
             new Date().toISOString(),
-            nome,
-            email,
+            noteQualifica || "",
+            coloreScoring + " " + (probabilitaChiusura || 0) + "%",
+            nome || "",
             telefono || "",
+            email || "",
+            nomeAzienda || "",
+            preventivoIndicato || "",
             descrizioneProgetto || "",
             conversazioneText,
           ];
 
           await sheets.spreadsheets.values.append({
             spreadsheetId: sheetId,
-            range: "A:F",
+            range: "A:J",
             valueInputOption: "USER_ENTERED",
             requestBody: {
               values: [row],
