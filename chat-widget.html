@@ -377,6 +377,14 @@
                 noteQualifica: leadData.noteQualifica || "",
                 conversazione: history.concat([{ role: "assistant", content: cleanText }])
               })
+            }).then(function() {
+              window.dataLayer = window.dataLayer || [];
+              window.dataLayer.push({
+                event: "spark_lead",
+                lead_nome: leadData.nome || "",
+                lead_telefono: leadData.telefono || "",
+                lead_azienda: leadData.nomeAzienda || ""
+              });
             }).catch(function() { /* silenzioso */ });
           }
         } catch (e) { /* JSON non valido, ignora */ }
