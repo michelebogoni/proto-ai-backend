@@ -89,7 +89,11 @@ exports.chat = onRequest(
         }
         messages.push({role: "user", content: message});
 
-        logger.info("Chat request", {sessionId, messageCount: messages.length});
+        logger.info("Chat request", {
+          sessionId,
+          messageCount: messages.length,
+          userMessage: message,
+        });
 
         // SSE headers
         res.setHeader("Content-Type", "text/event-stream");
