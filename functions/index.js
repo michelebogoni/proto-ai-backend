@@ -196,7 +196,8 @@ exports.lead = onRequest(
                 .map((msg) => {
                   const ruolo =
                     msg.role === "user" ? "Utente" : "Spark";
-                  return `${ruolo}: ${msg.content}`;
+                  const testo = (msg.content || "").replace(/\n+/g, " ").trim();
+                  return `${ruolo}: ${testo}`;
                 })
                 .join(" | ");
           } else if (typeof conversazione === "string") {
