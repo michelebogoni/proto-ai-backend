@@ -257,6 +257,166 @@ exports.lead = onRequest(
     },
 );
 
+// --- SUMMARY FUNCTION (conversazioni senza lead) ---
+exports.summary = onRequest(
+    {
+      memory: "512MiB",
+      timeoutSeconds: 60,
+      secrets: [
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_SERVICE_ACCOUNT_JSON",
+        "GOOGLE_SHEET_ID",
+      ],
+    },
+    async (req, res) => {
+      try {
+        if (handleCors(req, res)) return;
+
+        if (req.method !== "POST") {
+          res.status(405).json({error: "Metodo non consentito"});
+          return;
+        }
+
+        // sendBeacon invia text/plain per evitare preflight CORS
+        let body = req.body;
+        if (typeof body === "string") {
+          try {
+            body = JSON.parse(body);
+          } catch (e) {
+            res.status(400).json({error: "Corpo non valido"});
+            return;
+          }
+        }
+
+        const {conversazione} = body || {};
+        if (!Array.isArray(conversazione) || conversazione.length < 2) {
+          res.status(200).json({success: true});
+          return;
+        }
+
+        logger.info("Richiesta summary conversazione", {
+          messageCount: conversazione.length,
+        });
+
+        // Formatta conversazione per Claude
+        const conversazionePerAnalisi = conversazione
+            .map((m) => {
+              const ruolo = m.role === "user" ? "Utente" : "Spark";
+              return `${ruolo}: ${m.content}`;
+            })
+            .join("\n");
+
+        // Chiama Claude Haiku per generare il riassunto strutturato
+        const anthropic = new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY,
+        });
+
+        const summaryResponse = await anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 500,
+          messages: [{
+            role: "user",
+            content: `Analizza questa conversazione tra un utente e Spark \
+(chatbot di vendita per Nexo, azienda di sviluppo software su misura). \
+L'utente NON ha lasciato i dati di contatto.
+
+Rispondi SOLO con un JSON valido (nessun altro testo, nessun markdown) \
+con questi campi:
+- "argomento": cosa ha chiesto o voleva l'utente (1-2 frasi concise)
+- "dubbi": dubbi, perplessità o obiezioni espresse dall'utente \
+(1 frase, oppure "Nessuno emerso")
+- "reazionePreventivo": "nessuna" se non si è arrivati al preventivo, \
+"positiva" se ha reagito bene al prezzo, "resistenza" se ha mostrato \
+dubbi o obiezioni sul prezzo
+- "resistenzaContatto": "non richiesto" se non si è arrivati alla \
+fase contatto, "rifiutato" se ha rifiutato esplicitamente, "evitato" \
+se ha ignorato la richiesta
+- "noteGenerali": breve analisi di come è andata e perché non si è \
+convertita in lead (1-2 frasi)
+
+Conversazione:
+${conversazionePerAnalisi}`,
+          }],
+        });
+
+        let summary;
+        try {
+          summary = JSON.parse(summaryResponse.content[0].text);
+        } catch (e) {
+          logger.warn("Summary JSON non valido, uso testo grezzo", {
+            text: summaryResponse.content[0].text,
+          });
+          summary = {
+            argomento: "Non analizzabile",
+            dubbi: "",
+            reazionePreventivo: "nessuna",
+            resistenzaContatto: "non richiesto",
+            noteGenerali: summaryResponse.content[0].text
+                .substring(0, 200),
+          };
+        }
+
+        // Formatta transcript per il foglio
+        const transcriptText = conversazione
+            .map((msg) => {
+              const ruolo = msg.role === "user" ? "Utente" : "Spark";
+              const testo = (msg.content || "")
+                  .replace(/\n+/g, " ").trim();
+              return `${ruolo}: ${testo}`;
+            })
+            .join(" | ");
+
+        // Componi nota qualifica con tutti i dettagli dell'analisi
+        const noteQualifica = [
+          `Reazione preventivo: ${summary.reazionePreventivo || "nessuna"}`,
+          `Resistenza contatto: ` +
+            `${summary.resistenzaContatto || "non richiesto"}`,
+          `Dubbi: ${summary.dubbi || "Nessuno emerso"}`,
+          summary.noteGenerali || "",
+        ].filter(Boolean).join(" — ");
+
+        // Salva su Google Sheets
+        const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
+        const credentials = JSON.parse(raw);
+        const auth = new google.auth.GoogleAuth({
+          credentials,
+          scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+        });
+        const sheets = google.sheets({version: "v4", auth});
+        const sheetId = process.env.GOOGLE_SHEET_ID;
+
+        const row = [
+          new Date().toISOString(), // A: Data
+          noteQualifica, // B: Note Qualifica (analisi AI)
+          "⚪ No lead", // C: Colore Scoring
+          "", // D: Nome
+          "", // E: Telefono
+          "", // F: Email
+          "", // G: Nome Azienda
+          "", // H: Preventivo Indicato
+          summary.argomento || "", // I: Descrizione Progetto
+          transcriptText, // J: Conversazione
+        ];
+
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: sheetId,
+          range: "A:J",
+          valueInputOption: "USER_ENTERED",
+          requestBody: {values: [row]},
+        });
+
+        logger.info("Summary conversazione salvato su Google Sheet");
+        res.status(200).json({success: true});
+      } catch (err) {
+        logger.error("Errore nella funzione summary", {
+          message: err.message,
+          stack: err.stack,
+        });
+        res.status(200).json({success: true});
+      }
+    },
+);
+
 // --- KEEP ALIVE FUNCTION ---
 exports.keepAlive = onSchedule(
     {

@@ -412,5 +412,26 @@
   }
 
   addMessage("assistant", WELCOME_MSG);
+
+  // --- Invio summary per conversazioni senza lead ---
+  var summarySent = false;
+
+  function sendSummaryIfNeeded() {
+    if (summarySent || leadSent || history.length < 2) return;
+    summarySent = true;
+    var payload = JSON.stringify({ conversazione: history });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(
+        API_BASE + "/summary",
+        new Blob([payload], { type: "text/plain" })
+      );
+    }
+  }
+
+  document.addEventListener("visibilitychange", function() {
+    if (document.visibilityState === "hidden") sendSummaryIfNeeded();
+  });
+
+  window.addEventListener("beforeunload", sendSummaryIfNeeded);
 })();
 </script>
