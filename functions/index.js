@@ -341,7 +341,12 @@ ${conversazionePerAnalisi}`,
 
         let summary;
         try {
-          summary = JSON.parse(summaryResponse.content[0].text);
+          let rawText = summaryResponse.content[0].text.trim();
+          // Strip markdown code blocks if present
+          rawText = rawText
+              .replace(/^```(?:json)?\s*/i, "")
+              .replace(/\s*```\s*$/, "");
+          summary = JSON.parse(rawText);
         } catch (e) {
           logger.warn("Summary JSON non valido, uso testo grezzo", {
             text: summaryResponse.content[0].text,
