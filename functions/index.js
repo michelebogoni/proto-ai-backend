@@ -397,6 +397,8 @@ dubbi o obiezioni sul prezzo
 - "resistenzaContatto": "non richiesto" se non si è arrivati alla \
 fase contatto, "rifiutato" se ha rifiutato esplicitamente, "evitato" \
 se ha ignorato la richiesta
+- "preventivo": il prezzo comunicato da Spark (es. "1.800€"), oppure \
+stringa vuota se non è stato comunicato nessun preventivo
 - "noteGenerali": breve analisi di come è andata e perché non si è \
 convertita in lead (1-2 frasi)
 
@@ -422,6 +424,7 @@ ${conversazionePerAnalisi}`,
             dubbi: "",
             reazionePreventivo: "nessuna",
             resistenzaContatto: "non richiesto",
+            preventivo: "",
             noteGenerali: summaryResponse.content[0].text
                 .substring(0, 200),
           };
@@ -449,18 +452,24 @@ ${conversazionePerAnalisi}`,
         }
 
         if (rowNum) {
-          // Aggiorna solo B, C, I, J (non tocca D-H per non
+          // Aggiorna B, C, H, I, J (non tocca D-G per non
           // sovrascrivere dati lead)
+          const updateData = [
+            {range: `B${rowNum}`, values: [[noteQualifica]]},
+            {range: `C${rowNum}`, values: [["⚪ No lead"]]},
+            {range: `I${rowNum}`, values: [[summary.argomento || ""]]},
+            {range: `J${rowNum}`, values: [[transcriptText]]},
+          ];
+          if (summary.preventivo) {
+            updateData.push(
+                {range: `H${rowNum}`, values: [[summary.preventivo]]},
+            );
+          }
           await sheets.spreadsheets.values.batchUpdate({
             spreadsheetId: sheetId,
             requestBody: {
               valueInputOption: "USER_ENTERED",
-              data: [
-                {range: `B${rowNum}`, values: [[noteQualifica]]},
-                {range: `C${rowNum}`, values: [["⚪ No lead"]]},
-                {range: `I${rowNum}`, values: [[summary.argomento || ""]]},
-                {range: `J${rowNum}`, values: [[transcriptText]]},
-              ],
+              data: updateData,
             },
           });
           logger.info("Summary aggiornato su riga esistente", {
@@ -475,7 +484,7 @@ ${conversazionePerAnalisi}`,
             "", // E: Telefono
             "", // F: Email
             "", // G: Nome Azienda
-            "", // H: Preventivo Indicato
+            summary.preventivo || "", // H: Preventivo Indicato
             summary.argomento || "", // I: Descrizione Progetto
             transcriptText, // J: Conversazione
             sessionId || "", // K: SessionId
@@ -605,14 +614,28 @@ exports.track = onRequest(
 
             const aiResp = await anthropic.messages.create({
               model: "claude-haiku-4-5-20251001",
-              max_tokens: 300,
+              max_tokens: 500,
               messages: [{
                 role: "user",
                 content: `Analizza questa conversazione tra un utente e Spark \
-(chatbot di vendita per Nexo, azienda di sviluppo software). \
-Rispondi SOLO con un JSON valido con questi campi:
-- "argomento": cosa ha chiesto l'utente (1 frase concisa)
-- "note": breve analisi di come è andata (1-2 frasi)
+(chatbot di vendita per Nexo, azienda di sviluppo software su misura). \
+L'utente NON ha lasciato i dati di contatto.
+
+Rispondi SOLO con un JSON valido (nessun altro testo, nessun markdown) \
+con questi campi:
+- "argomento": cosa ha chiesto o voleva l'utente (1-2 frasi concise)
+- "dubbi": dubbi, perplessità o obiezioni espresse dall'utente \
+(1 frase, oppure "Nessuno emerso")
+- "reazionePreventivo": "nessuna" se non si è arrivati al preventivo, \
+"positiva" se ha reagito bene al prezzo, "resistenza" se ha mostrato \
+dubbi o obiezioni sul prezzo
+- "resistenzaContatto": "non richiesto" se non si è arrivati alla \
+fase contatto, "rifiutato" se ha rifiutato esplicitamente, "evitato" \
+se ha ignorato la richiesta
+- "preventivo": il prezzo comunicato da Spark (es. "1.800€"), oppure \
+stringa vuota se non è stato comunicato nessun preventivo
+- "noteGenerali": breve analisi di come è andata e perché non si è \
+convertita in lead (1-2 frasi)
 
 Conversazione:
 ${conversazionePerAnalisi}`,
@@ -625,20 +648,35 @@ ${conversazionePerAnalisi}`,
                 .replace(/\s*```\s*$/, "");
             const analysis = JSON.parse(rawText);
 
+            const noteQualifica = [
+              `Reazione preventivo: ` +
+                `${analysis.reazionePreventivo || "nessuna"}`,
+              `Resistenza contatto: ` +
+                `${analysis.resistenzaContatto || "non richiesto"}`,
+              `Dubbi: ${analysis.dubbi || "Nessuno emerso"}`,
+              analysis.noteGenerali || "",
+            ].filter(Boolean).join(" — ");
+
             // Trova la riga corrente (potrebbe essere cambiata)
             const updRow =
               await findRowBySessionId(sheets, sheetId, sessionId);
             if (updRow) {
+              const updateData = [
+                {range: `B${updRow}`, values: [[noteQualifica]]},
+                {range: `I${updRow}`,
+                  values: [[analysis.argomento || ""]]},
+              ];
+              if (analysis.preventivo) {
+                updateData.push(
+                    {range: `H${updRow}`,
+                      values: [[analysis.preventivo]]},
+                );
+              }
               await sheets.spreadsheets.values.batchUpdate({
                 spreadsheetId: sheetId,
                 requestBody: {
                   valueInputOption: "USER_ENTERED",
-                  data: [
-                    {range: `B${updRow}`,
-                      values: [[analysis.note || ""]]},
-                    {range: `I${updRow}`,
-                      values: [[analysis.argomento || ""]]},
-                  ],
+                  data: updateData,
                 },
               });
             }
