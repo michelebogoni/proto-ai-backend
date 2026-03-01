@@ -83,6 +83,11 @@
   .proto-ai-msg--user .proto-ai-avatar {\
     display: none;\
   }\
+  @media (max-width: 768px) {\
+    .proto-ai-avatar {\
+      display: none !important;\
+    }\
+  }\
   .proto-ai-msg-content {\
     display: flex;\
     flex-direction: column;\
@@ -171,6 +176,31 @@
   .proto-ai-send:disabled {\
     opacity: 0.4;\
     cursor: not-allowed;\
+  }\
+  .proto-ai-typing {\
+    display: flex;\
+    gap: 5px;\
+    padding: 4px 0;\
+  }\
+  .proto-ai-typing span {\
+    width: 8px;\
+    height: 8px;\
+    background: #94A3B8;\
+    border-radius: 50%;\
+    animation: proto-ai-bounce 1.2s infinite ease-in-out;\
+  }\
+  .proto-ai-typing span:nth-child(2) {\
+    animation-delay: 0.2s;\
+  }\
+  .proto-ai-typing span:nth-child(3) {\
+    animation-delay: 0.4s;\
+  }\
+  @keyframes proto-ai-bounce {\
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }\
+    30% { transform: translateY(-6px); opacity: 1; }\
+  }\
+  #spark-fab {\
+    transition: transform 0.5s ease !important;\
   }";
   document.head.appendChild(style);
 
@@ -342,6 +372,8 @@
       setStreaming(true);
 
       var assistantBubble = addMessage("assistant", "");
+      assistantBubble.innerHTML = '<div class="proto-ai-typing"><span></span><span></span><span></span></div>';
+      var typingRemoved = false;
       var fullResponse = "";
 
       fetch(API_BASE + "/chat", {
@@ -373,6 +405,10 @@
               try {
                 var data = JSON.parse(line.slice(6));
                 if (data.type === "text") {
+                  if (!typingRemoved) {
+                    assistantBubble.innerHTML = "";
+                    typingRemoved = true;
+                  }
                   fullResponse += data.content;
                   var displayText = fullResponse;
                   var markerIdx = displayText.indexOf(LEAD_START);
@@ -495,5 +531,32 @@
     });
 
     window.addEventListener("beforeunload", onPageLeave);
+  }
+
+  // --- Hide FAB when #cta is visible ---
+  function setupFabObserver() {
+    var ctaEl = document.getElementById("cta");
+    var fabEl = document.getElementById("spark-fab");
+
+    if (!ctaEl || !fabEl) return;
+
+    var tooltipEl = document.getElementById("spark-tooltip");
+
+    var observer = new IntersectionObserver(function(entries) {
+      var isVisible = entries[0].isIntersecting;
+      fabEl.style.transform = isVisible ? "translateX(120px)" : "translateX(0)";
+      if (isVisible && tooltipEl) {
+        tooltipEl.classList.remove("show");
+      }
+    }, { threshold: 0.1 });
+
+    observer.observe(ctaEl);
+  }
+
+  // Wait for full DOM before looking for #cta and #spark-fab
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", setupFabObserver);
+  } else {
+    setupFabObserver();
   }
 })();
