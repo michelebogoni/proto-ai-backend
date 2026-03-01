@@ -136,7 +136,7 @@
     border-radius: 12px;\
     padding: 14px 16px;\
     color: #0A0F1C;\
-    font-size: 15px;\
+    font-size: 16px;\
     font-family: inherit;\
     outline: none;\
     resize: none;\
