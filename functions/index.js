@@ -108,12 +108,26 @@ exports.chat = onRequest(
           messages,
         });
 
+        let fullResponse = "";
+
         stream.on("text", (text) => {
+          fullResponse += text;
           const payload = JSON.stringify({type: "text", content: text});
           res.write(`data: ${payload}\n\n`);
         });
 
         stream.on("end", () => {
+          // Log della risposta (senza LEAD_DATA)
+          let logText = fullResponse;
+          const leadIdx = logText.indexOf("|||LEAD_DATA|||");
+          if (leadIdx !== -1) {
+            logText = logText.substring(0, leadIdx).trimEnd();
+          }
+          logger.info("Chat response", {
+            sessionId,
+            assistantMessage: logText,
+          });
+
           res.write(`data: ${JSON.stringify({type: "done"})}\n\n`);
           res.end();
         });

@@ -541,16 +541,27 @@
     if (!ctaEl || !fabEl) return;
 
     var tooltipEl = document.getElementById("spark-tooltip");
+    var ctaIsVisible = false;
 
     var observer = new IntersectionObserver(function(entries) {
-      var isVisible = entries[0].isIntersecting;
-      fabEl.style.transform = isVisible ? "translateX(120px)" : "translateX(0)";
-      if (isVisible && tooltipEl) {
+      ctaIsVisible = entries[0].isIntersecting;
+      fabEl.style.transform = ctaIsVisible ? "translateX(120px)" : "translateX(0)";
+      if (ctaIsVisible && tooltipEl) {
         tooltipEl.classList.remove("show");
       }
     }, { threshold: 0.1 });
 
     observer.observe(ctaEl);
+
+    // Block tooltip from appearing while #cta is visible
+    if (tooltipEl) {
+      var tooltipWatcher = new MutationObserver(function() {
+        if (ctaIsVisible && tooltipEl.classList.contains("show")) {
+          tooltipEl.classList.remove("show");
+        }
+      });
+      tooltipWatcher.observe(tooltipEl, { attributes: true, attributeFilter: ["class"] });
+    }
   }
 
   // Wait for full DOM before looking for #cta and #spark-fab
