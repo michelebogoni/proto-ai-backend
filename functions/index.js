@@ -9,6 +9,53 @@ const path = require("path");
 
 setGlobalOptions({maxInstances: 10, region: "europe-west1"});
 
+// --- SHARED HELPERS ---
+
+/**
+ * Returns authenticated Google Sheets client.
+ */
+function getSheetsClient() {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
+  const credentials = JSON.parse(raw);
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+  return google.sheets({version: "v4", auth});
+}
+
+/**
+ * Finds row number (1-indexed) by sessionId in column K.
+ * Returns null if not found.
+ */
+async function findRowBySessionId(sheets, sheetId, sessionId) {
+  const resp = await sheets.spreadsheets.values.get({
+    spreadsheetId: sheetId,
+    range: "K:K",
+  });
+  const rows = resp.data.values || [];
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i][0] === sessionId) {
+      return i + 1; // 1-indexed
+    }
+  }
+  return null;
+}
+
+/**
+ * Formats conversation array as "Utente: ... | Spark: ..."
+ */
+function formatTranscript(conversazione) {
+  if (!Array.isArray(conversazione)) return "";
+  return conversazione
+      .map((msg) => {
+        const ruolo = msg.role === "user" ? "Utente" : "Spark";
+        const testo = (msg.content || "").replace(/\n+/g, " ").trim();
+        return `${ruolo}: ${testo}`;
+      })
+      .join(" | ");
+}
+
 // --- CORS ---
 const ALLOWED_ORIGINS = [
   "https://gonexo.site",
@@ -173,9 +220,9 @@ exports.lead = onRequest(
           return;
         }
 
-        const {nome, email, telefono, nomeAzienda, descrizioneProgetto,
-          preventivoIndicato, probabilitaChiusura, noteQualifica,
-          conversazione} = req.body || {};
+        const {sessionId, nome, email, telefono, nomeAzienda,
+          descrizioneProgetto, preventivoIndicato, probabilitaChiusura,
+          noteQualifica, conversazione} = req.body || {};
 
         if (!telefono) {
           res.status(400).json({error: "Il numero di telefono è obbligatorio"});
@@ -183,6 +230,7 @@ exports.lead = onRequest(
         }
 
         logger.info("Nuovo lead ricevuto", {
+          sessionId: sessionId || "N/A",
           telefono,
           nome: nome || "N/A",
           email: email || "N/A",
@@ -191,29 +239,13 @@ exports.lead = onRequest(
         });
 
         try {
-          // Parsing credenziali service account
-          const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
-          const credentials = JSON.parse(raw);
-
-          const auth = new google.auth.GoogleAuth({
-            credentials,
-            scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-          });
-
-          const sheets = google.sheets({version: "v4", auth});
+          const sheets = getSheetsClient();
           const sheetId = process.env.GOOGLE_SHEET_ID;
 
           // Formatta la conversazione come testo leggibile
           let conversazioneText = "";
           if (Array.isArray(conversazione)) {
-            conversazioneText = conversazione
-                .map((msg) => {
-                  const ruolo =
-                    msg.role === "user" ? "Utente" : "Spark";
-                  const testo = (msg.content || "").replace(/\n+/g, " ").trim();
-                  return `${ruolo}: ${testo}`;
-                })
-                .join(" | ");
+            conversazioneText = formatTranscript(conversazione);
           } else if (typeof conversazione === "string") {
             conversazioneText = conversazione;
           }
@@ -234,18 +266,35 @@ exports.lead = onRequest(
             preventivoIndicato || "",
             descrizioneProgetto || "",
             conversazioneText,
+            sessionId || "",
           ];
 
-          await sheets.spreadsheets.values.append({
-            spreadsheetId: sheetId,
-            range: "A:J",
-            valueInputOption: "USER_ENTERED",
-            requestBody: {
-              values: [row],
-            },
-          });
+          // Upsert: cerca riga esistente per sessionId
+          let rowNum = null;
+          if (sessionId) {
+            rowNum = await findRowBySessionId(sheets, sheetId, sessionId);
+          }
 
-          logger.info("Lead salvato su Google Sheet", {nome, email});
+          if (rowNum) {
+            // Aggiorna riga esistente (A:K)
+            await sheets.spreadsheets.values.update({
+              spreadsheetId: sheetId,
+              range: `A${rowNum}:K${rowNum}`,
+              valueInputOption: "USER_ENTERED",
+              requestBody: {values: [row]},
+            });
+            logger.info("Lead aggiornato su riga esistente", {
+              rowNum, sessionId,
+            });
+          } else {
+            await sheets.spreadsheets.values.append({
+              spreadsheetId: sheetId,
+              range: "A:K",
+              valueInputOption: "USER_ENTERED",
+              requestBody: {values: [row]},
+            });
+            logger.info("Lead salvato su nuova riga", {nome, email});
+          }
         } catch (sheetErr) {
           logger.error("Errore salvataggio su Google Sheet", {
             message: sheetErr.message,
@@ -302,13 +351,14 @@ exports.summary = onRequest(
           }
         }
 
-        const {conversazione} = body || {};
+        const {sessionId, conversazione} = body || {};
         if (!Array.isArray(conversazione) || conversazione.length < 2) {
           res.status(200).json({success: true});
           return;
         }
 
         logger.info("Richiesta summary conversazione", {
+          sessionId: sessionId || "N/A",
           messageCount: conversazione.length,
         });
 
@@ -376,14 +426,7 @@ ${conversazionePerAnalisi}`,
         }
 
         // Formatta transcript per il foglio
-        const transcriptText = conversazione
-            .map((msg) => {
-              const ruolo = msg.role === "user" ? "Utente" : "Spark";
-              const testo = (msg.content || "")
-                  .replace(/\n+/g, " ").trim();
-              return `${ruolo}: ${testo}`;
-            })
-            .join(" | ");
+        const transcriptText = formatTranscript(conversazione);
 
         // Componi nota qualifica con tutti i dettagli dell'analisi
         const noteQualifica = [
@@ -394,35 +437,54 @@ ${conversazionePerAnalisi}`,
           summary.noteGenerali || "",
         ].filter(Boolean).join(" — ");
 
-        // Salva su Google Sheets
-        const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || "";
-        const credentials = JSON.parse(raw);
-        const auth = new google.auth.GoogleAuth({
-          credentials,
-          scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-        });
-        const sheets = google.sheets({version: "v4", auth});
+        // Salva su Google Sheets con upsert
+        const sheets = getSheetsClient();
         const sheetId = process.env.GOOGLE_SHEET_ID;
 
-        const row = [
-          new Date().toISOString(), // A: Data
-          noteQualifica, // B: Note Qualifica (analisi AI)
-          "⚪ No lead", // C: Colore Scoring
-          "", // D: Nome
-          "", // E: Telefono
-          "", // F: Email
-          "", // G: Nome Azienda
-          "", // H: Preventivo Indicato
-          summary.argomento || "", // I: Descrizione Progetto
-          transcriptText, // J: Conversazione
-        ];
+        let rowNum = null;
+        if (sessionId) {
+          rowNum = await findRowBySessionId(sheets, sheetId, sessionId);
+        }
 
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: sheetId,
-          range: "A:J",
-          valueInputOption: "USER_ENTERED",
-          requestBody: {values: [row]},
-        });
+        if (rowNum) {
+          // Aggiorna solo B, C, I, J (non tocca D-H per non
+          // sovrascrivere dati lead)
+          await sheets.spreadsheets.values.batchUpdate({
+            spreadsheetId: sheetId,
+            requestBody: {
+              valueInputOption: "USER_ENTERED",
+              data: [
+                {range: `B${rowNum}`, values: [[noteQualifica]]},
+                {range: `C${rowNum}`, values: [["⚪ No lead"]]},
+                {range: `I${rowNum}`, values: [[summary.argomento || ""]]},
+                {range: `J${rowNum}`, values: [[transcriptText]]},
+              ],
+            },
+          });
+          logger.info("Summary aggiornato su riga esistente", {
+            rowNum, sessionId,
+          });
+        } else {
+          const row = [
+            new Date().toISOString(), // A: Data
+            noteQualifica, // B: Note Qualifica
+            "⚪ No lead", // C: Colore Scoring
+            "", // D: Nome
+            "", // E: Telefono
+            "", // F: Email
+            "", // G: Nome Azienda
+            "", // H: Preventivo Indicato
+            summary.argomento || "", // I: Descrizione Progetto
+            transcriptText, // J: Conversazione
+            sessionId || "", // K: SessionId
+          ];
+          await sheets.spreadsheets.values.append({
+            spreadsheetId: sheetId,
+            range: "A:K",
+            valueInputOption: "USER_ENTERED",
+            requestBody: {values: [row]},
+          });
+        }
 
         logger.info("Summary conversazione salvato su Google Sheet");
         res.status(200).json({success: true});
@@ -432,6 +494,99 @@ ${conversazionePerAnalisi}`,
           stack: err.stack,
         });
         res.status(200).json({success: true});
+      }
+    },
+);
+
+// --- TRACK FUNCTION (salva ogni conversazione su page leave) ---
+exports.track = onRequest(
+    {
+      memory: "256MiB",
+      timeoutSeconds: 15,
+      secrets: ["GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SHEET_ID"],
+    },
+    async (req, res) => {
+      try {
+        if (handleCors(req, res)) return;
+
+        if (req.method !== "POST") {
+          res.status(200).end();
+          return;
+        }
+
+        // sendBeacon invia text/plain
+        let body = req.body;
+        if (typeof body === "string") {
+          try {
+            body = JSON.parse(body);
+          } catch (e) {
+            res.status(200).end();
+            return;
+          }
+        }
+
+        const {sessionId, history, leadSent} = body || {};
+
+        // Ignora se nessun messaggio utente
+        if (!sessionId || !Array.isArray(history)) {
+          res.status(200).end();
+          return;
+        }
+        const hasUserMsg = history.some((m) => m.role === "user");
+        if (!hasUserMsg) {
+          res.status(200).end();
+          return;
+        }
+
+        const sheets = getSheetsClient();
+        const sheetId = process.env.GOOGLE_SHEET_ID;
+        const conversazioneText = formatTranscript(history);
+        const rowNum = await findRowBySessionId(sheets, sheetId, sessionId);
+
+        if (rowNum) {
+          // Aggiorna solo timestamp e conversazione
+          await sheets.spreadsheets.values.batchUpdate({
+            spreadsheetId: sheetId,
+            requestBody: {
+              valueInputOption: "USER_ENTERED",
+              data: [
+                {range: `A${rowNum}`, values: [[new Date().toISOString()]]},
+                {range: `J${rowNum}`, values: [[conversazioneText]]},
+              ],
+            },
+          });
+        } else {
+          // Crea nuova riga
+          const label = leadSent ? "🟡 Lead inviato" : "⚪ No lead";
+          const row = [
+            new Date().toISOString(), // A: Data
+            "", // B: Note Qualifica
+            label, // C: Colore Scoring
+            "", // D: Nome
+            "", // E: Telefono
+            "", // F: Email
+            "", // G: Nome Azienda
+            "", // H: Preventivo Indicato
+            "", // I: Descrizione Progetto
+            conversazioneText, // J: Conversazione
+            sessionId, // K: SessionId
+          ];
+          await sheets.spreadsheets.values.append({
+            spreadsheetId: sheetId,
+            range: "A:K",
+            valueInputOption: "USER_ENTERED",
+            requestBody: {values: [row]},
+          });
+        }
+
+        logger.info("Track salvato", {sessionId, msgCount: history.length});
+        res.status(200).end();
+      } catch (err) {
+        logger.error("Errore nella funzione track", {
+          message: err.message,
+          stack: err.stack,
+        });
+        res.status(200).end();
       }
     },
 );

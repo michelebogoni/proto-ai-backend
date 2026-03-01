@@ -226,8 +226,11 @@
 
   function sendSummaryForSession(session) {
     if (!session || !session.history || session.history.length < 2) return;
-    if (session.leadSent || session.summarySent) return;
-    var payload = JSON.stringify({ conversazione: session.history });
+    if (session.leadSent) return;
+    var payload = JSON.stringify({
+      sessionId: session.sessionId,
+      conversazione: session.history
+    });
     if (navigator.sendBeacon) {
       navigator.sendBeacon(
         API_BASE + "/summary",
@@ -286,23 +289,27 @@
     var sessionId;
     var history;
     var leadSent;
+    var lastTrackedCount;
     var isStreaming = false;
 
     if (restoredSession) {
       sessionId = restoredSession.sessionId;
       history = restoredSession.history || [];
       leadSent = restoredSession.leadSent || false;
+      lastTrackedCount = restoredSession.lastTrackedCount || 0;
     } else {
       sessionId = crypto.randomUUID ? crypto.randomUUID() : ("s-" + Math.random().toString(36).slice(2) + Date.now().toString(36));
       history = [];
       leadSent = false;
+      lastTrackedCount = 0;
     }
 
     function persistState() {
       saveSession({
         sessionId: sessionId,
         history: history,
-        leadSent: leadSent
+        leadSent: leadSent,
+        lastTrackedCount: lastTrackedCount
       });
     }
 
@@ -465,6 +472,7 @@
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
+                  sessionId: sessionId,
                   nome: leadData.nome || "",
                   email: leadData.email || "",
                   telefono: leadData.telefono,
@@ -521,9 +529,30 @@
       addMessage("assistant", WELCOME_MSG);
     }
 
-    // --- Persist state on page leave (no summary) ---
+    // --- Persist state + track on page leave ---
     function onPageLeave() {
       persistState();
+      // Invia a /track solo se ci sono nuovi messaggi dall'ultimo track
+      if (history.length > lastTrackedCount) {
+        var trackHistory = history;
+        // Guard per payload >60KB: tronca a primi 2 + ultimi 20 messaggi
+        if (trackHistory.length > 22) {
+          trackHistory = trackHistory.slice(0, 2).concat(trackHistory.slice(-20));
+        }
+        var payload = JSON.stringify({
+          sessionId: sessionId,
+          history: trackHistory,
+          leadSent: leadSent
+        });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(
+            API_BASE + "/track",
+            new Blob([payload], { type: "text/plain" })
+          );
+        }
+        lastTrackedCount = history.length;
+        persistState();
+      }
     }
 
     document.addEventListener("visibilitychange", function() {
