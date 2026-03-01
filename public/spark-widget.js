@@ -503,6 +503,27 @@
 
       persistState();
 
+      // Track progressivo: salva su Sheet dopo ogni risposta
+      if (history.length > lastTrackedCount) {
+        var trackHistory = history;
+        if (trackHistory.length > 22) {
+          trackHistory = trackHistory.slice(0, 2).concat(trackHistory.slice(-20));
+        }
+        var trackPayload = JSON.stringify({
+          sessionId: sessionId,
+          history: trackHistory,
+          leadSent: leadSent
+        });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(
+            API_BASE + "/track",
+            new Blob([trackPayload], { type: "text/plain" })
+          );
+        }
+        lastTrackedCount = history.length;
+        persistState();
+      }
+
       var bubbles = messagesEl.querySelectorAll(".proto-ai-msg--assistant .proto-ai-bubble");
       if (bubbles.length > 0) {
         bubbles[bubbles.length - 1].textContent = cleanText;

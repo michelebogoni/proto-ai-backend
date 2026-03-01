@@ -60,6 +60,8 @@ function formatTranscript(conversazione) {
 const ALLOWED_ORIGINS = [
   "https://gonexo.site",
   "https://www.gonexo.site",
+  "https://gonexo.it",
+  "https://www.gonexo.it",
   "http://localhost:3000",
 ];
 
