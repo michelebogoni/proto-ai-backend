@@ -502,8 +502,12 @@ ${conversazionePerAnalisi}`,
 exports.track = onRequest(
     {
       memory: "256MiB",
-      timeoutSeconds: 15,
-      secrets: ["GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SHEET_ID"],
+      timeoutSeconds: 30,
+      secrets: [
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_SERVICE_ACCOUNT_JSON",
+        "GOOGLE_SHEET_ID",
+      ],
     },
     async (req, res) => {
       try {
@@ -579,8 +583,72 @@ exports.track = onRequest(
           });
         }
 
-        logger.info("Track salvato", {sessionId, msgCount: history.length});
+        // Rispondi subito (sendBeacon è fire-and-forget)
         res.status(200).end();
+
+        // Analisi AI asincrona (dopo aver risposto)
+        // Skip se lead già inviato (verrà analizzato da /lead)
+        if (!leadSent && history.length >= 2) {
+          try {
+            const anthropic = new Anthropic({
+              apiKey: process.env.ANTHROPIC_API_KEY,
+            });
+
+            const conversazionePerAnalisi = history
+                .map((m) => {
+                  const ruolo = m.role === "user" ? "Utente" : "Spark";
+                  return `${ruolo}: ${m.content}`;
+                })
+                .join("\n");
+
+            const aiResp = await anthropic.messages.create({
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 300,
+              messages: [{
+                role: "user",
+                content: `Analizza questa conversazione tra un utente e Spark \
+(chatbot di vendita per Nexo, azienda di sviluppo software). \
+Rispondi SOLO con un JSON valido con questi campi:
+- "argomento": cosa ha chiesto l'utente (1 frase concisa)
+- "note": breve analisi di come è andata (1-2 frasi)
+
+Conversazione:
+${conversazionePerAnalisi}`,
+              }],
+            });
+
+            let rawText = aiResp.content[0].text.trim();
+            rawText = rawText
+                .replace(/^```(?:json)?\s*/i, "")
+                .replace(/\s*```\s*$/, "");
+            const analysis = JSON.parse(rawText);
+
+            // Trova la riga corrente (potrebbe essere cambiata)
+            const updRow =
+              await findRowBySessionId(sheets, sheetId, sessionId);
+            if (updRow) {
+              await sheets.spreadsheets.values.batchUpdate({
+                spreadsheetId: sheetId,
+                requestBody: {
+                  valueInputOption: "USER_ENTERED",
+                  data: [
+                    {range: `B${updRow}`,
+                      values: [[analysis.note || ""]]},
+                    {range: `I${updRow}`,
+                      values: [[analysis.argomento || ""]]},
+                  ],
+                },
+              });
+            }
+            logger.info("Track: analisi AI completata", {sessionId});
+          } catch (aiErr) {
+            logger.warn("Track: analisi AI fallita", {
+              message: aiErr.message,
+            });
+          }
+        }
+
+        logger.info("Track salvato", {sessionId, msgCount: history.length});
       } catch (err) {
         logger.error("Errore nella funzione track", {
           message: err.message,
