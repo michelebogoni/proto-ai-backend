@@ -434,13 +434,7 @@ ${conversazionePerAnalisi}`,
         const transcriptText = formatTranscript(conversazione);
 
         // Componi nota qualifica con tutti i dettagli dell'analisi
-        const noteQualifica = [
-          `Reazione preventivo: ${summary.reazionePreventivo || "nessuna"}`,
-          `Resistenza contatto: ` +
-            `${summary.resistenzaContatto || "non richiesto"}`,
-          `Dubbi: ${summary.dubbi || "Nessuno emerso"}`,
-          summary.noteGenerali || "",
-        ].filter(Boolean).join(" — ");
+        const noteQualifica = summary.noteGenerali || "";
 
         // Salva su Google Sheets con upsert
         const sheets = getSheetsClient();
@@ -648,14 +642,7 @@ ${conversazionePerAnalisi}`,
                 .replace(/\s*```\s*$/, "");
             const analysis = JSON.parse(rawText);
 
-            const noteQualifica = [
-              `Reazione preventivo: ` +
-                `${analysis.reazionePreventivo || "nessuna"}`,
-              `Resistenza contatto: ` +
-                `${analysis.resistenzaContatto || "non richiesto"}`,
-              `Dubbi: ${analysis.dubbi || "Nessuno emerso"}`,
-              analysis.noteGenerali || "",
-            ].filter(Boolean).join(" — ");
+            const noteQualifica = analysis.noteGenerali || "";
 
             // Trova la riga corrente (potrebbe essere cambiata)
             const updRow =
