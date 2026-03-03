@@ -419,6 +419,12 @@
       var text = inputEl.value.trim();
       if (!text || isStreaming) return;
 
+      // Primo messaggio utente: traccia inizio conversazione
+      if (history.length === 0) {
+        window.dataLayer = window.dataLayer || [];
+        window.dataLayer.push({ event: "spark_chat_start" });
+      }
+
       addMessage("user", text);
       history.push({ role: "user", content: text });
       persistState();
