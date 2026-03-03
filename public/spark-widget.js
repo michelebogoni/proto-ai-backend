@@ -8,6 +8,48 @@
   var STORAGE_KEY = "spark_session";
   var SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
+  // --- Traffic source detection ---
+  function detectTrafficSource() {
+    var params;
+    try { params = new URLSearchParams(window.location.search); }
+    catch (e) { return ""; }
+
+    var referrerHost = "";
+    try {
+      if (document.referrer) referrerHost = new URL(document.referrer).hostname.toLowerCase();
+    } catch (e) { /* ignore */ }
+
+    // Google Ads: gclid or utm paid google
+    if (params.has("gclid")) return "Google Ads";
+    var utmSource = (params.get("utm_source") || "").toLowerCase();
+    var utmMedium = (params.get("utm_medium") || "").toLowerCase();
+    var isPaid = /cpc|paid|ppc|paidsocial/.test(utmMedium);
+
+    if (/google/.test(utmSource) && isPaid) return "Google Ads";
+
+    // Meta Facebook Ads
+    if (/facebook|fb/.test(utmSource) && isPaid) return "Meta Facebook Ads";
+
+    // Meta Instagram Ads
+    if (/instagram|ig/.test(utmSource) && isPaid) return "Meta Instagram Ads";
+
+    // fbclid without paid UTM: organic Facebook
+    if (params.has("fbclid")) return "Meta Facebook";
+
+    // Organic search (referrer from search engine, no gclid)
+    if (/google\./i.test(referrerHost)) return "Ricerca organica";
+    if (/bing\.com/i.test(referrerHost)) return "Ricerca organica";
+    if (/yahoo\./i.test(referrerHost)) return "Ricerca organica";
+    if (/duckduckgo/i.test(referrerHost)) return "Ricerca organica";
+
+    // Organic social from referrer
+    if (/facebook\.com|fb\.com/i.test(referrerHost)) return "Meta Facebook";
+    if (/instagram\.com/i.test(referrerHost)) return "Meta Instagram";
+
+    // Everything else: empty
+    return "";
+  }
+
   // --- Inject CSS ---
   var style = document.createElement("style");
   style.textContent = "\
@@ -292,16 +334,19 @@
     var lastTrackedCount;
     var isStreaming = false;
 
+    var trafficSource;
     if (restoredSession) {
       sessionId = restoredSession.sessionId;
       history = restoredSession.history || [];
       leadSent = restoredSession.leadSent || false;
       lastTrackedCount = restoredSession.lastTrackedCount || 0;
+      trafficSource = restoredSession.trafficSource || "";
     } else {
       sessionId = crypto.randomUUID ? crypto.randomUUID() : ("s-" + Math.random().toString(36).slice(2) + Date.now().toString(36));
       history = [];
       leadSent = false;
       lastTrackedCount = 0;
+      trafficSource = detectTrafficSource();
     }
 
     function persistState() {
@@ -309,7 +354,8 @@
         sessionId: sessionId,
         history: history,
         leadSent: leadSent,
-        lastTrackedCount: lastTrackedCount
+        lastTrackedCount: lastTrackedCount,
+        trafficSource: trafficSource
       });
     }
 
@@ -481,7 +527,8 @@
                   preventivoIndicato: leadData.preventivoIndicato || "",
                   probabilitaChiusura: leadData.probabilitaChiusura || 0,
                   noteQualifica: leadData.noteQualifica || "",
-                  conversazione: history.concat([{ role: "assistant", content: cleanText }])
+                  conversazione: history.concat([{ role: "assistant", content: cleanText }]),
+                  trafficSource: trafficSource
                 })
               }).then(function() {
                 window.dataLayer = window.dataLayer || [];
@@ -512,7 +559,8 @@
         var trackPayload = JSON.stringify({
           sessionId: sessionId,
           history: trackHistory,
-          leadSent: leadSent
+          leadSent: leadSent,
+          trafficSource: trafficSource
         });
         if (navigator.sendBeacon) {
           navigator.sendBeacon(
@@ -563,7 +611,8 @@
         var payload = JSON.stringify({
           sessionId: sessionId,
           history: trackHistory,
-          leadSent: leadSent
+          leadSent: leadSent,
+          trafficSource: trafficSource
         });
         if (navigator.sendBeacon) {
           navigator.sendBeacon(

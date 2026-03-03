@@ -224,7 +224,7 @@ exports.lead = onRequest(
 
         const {sessionId, nome, email, telefono, nomeAzienda,
           descrizioneProgetto, preventivoIndicato, probabilitaChiusura,
-          noteQualifica, conversazione} = req.body || {};
+          noteQualifica, conversazione, trafficSource} = req.body || {};
 
         if (!telefono) {
           res.status(400).json({error: "Il numero di telefono è obbligatorio"});
@@ -269,6 +269,7 @@ exports.lead = onRequest(
             descrizioneProgetto || "",
             conversazioneText,
             sessionId || "",
+            trafficSource || "",
           ];
 
           // Upsert: cerca riga esistente per sessionId
@@ -278,10 +279,10 @@ exports.lead = onRequest(
           }
 
           if (rowNum) {
-            // Aggiorna riga esistente (A:K)
+            // Aggiorna riga esistente (A:L)
             await sheets.spreadsheets.values.update({
               spreadsheetId: sheetId,
-              range: `A${rowNum}:K${rowNum}`,
+              range: `A${rowNum}:L${rowNum}`,
               valueInputOption: "USER_ENTERED",
               requestBody: {values: [row]},
             });
@@ -291,7 +292,7 @@ exports.lead = onRequest(
           } else {
             await sheets.spreadsheets.values.append({
               spreadsheetId: sheetId,
-              range: "A:K",
+              range: "A:L",
               valueInputOption: "USER_ENTERED",
               requestBody: {values: [row]},
             });
@@ -482,10 +483,11 @@ ${conversazionePerAnalisi}`,
             summary.argomento || "", // I: Descrizione Progetto
             transcriptText, // J: Conversazione
             sessionId || "", // K: SessionId
+            "", // L: Sorgente (non disponibile in summary)
           ];
           await sheets.spreadsheets.values.append({
             spreadsheetId: sheetId,
-            range: "A:K",
+            range: "A:L",
             valueInputOption: "USER_ENTERED",
             requestBody: {values: [row]},
           });
@@ -534,7 +536,7 @@ exports.track = onRequest(
           }
         }
 
-        const {sessionId, history, leadSent} = body || {};
+        const {sessionId, history, leadSent, trafficSource} = body || {};
 
         // Ignora se nessun messaggio utente
         if (!sessionId || !Array.isArray(history)) {
@@ -553,15 +555,21 @@ exports.track = onRequest(
         const rowNum = await findRowBySessionId(sheets, sheetId, sessionId);
 
         if (rowNum) {
-          // Aggiorna solo timestamp e conversazione
+          // Aggiorna timestamp, conversazione e sorgente
+          const updateData = [
+            {range: `A${rowNum}`, values: [[new Date().toISOString()]]},
+            {range: `J${rowNum}`, values: [[conversazioneText]]},
+          ];
+          if (trafficSource) {
+            updateData.push(
+                {range: `L${rowNum}`, values: [[trafficSource]]},
+            );
+          }
           await sheets.spreadsheets.values.batchUpdate({
             spreadsheetId: sheetId,
             requestBody: {
               valueInputOption: "USER_ENTERED",
-              data: [
-                {range: `A${rowNum}`, values: [[new Date().toISOString()]]},
-                {range: `J${rowNum}`, values: [[conversazioneText]]},
-              ],
+              data: updateData,
             },
           });
         } else {
@@ -579,10 +587,11 @@ exports.track = onRequest(
             "", // I: Descrizione Progetto
             conversazioneText, // J: Conversazione
             sessionId, // K: SessionId
+            trafficSource || "", // L: Sorgente
           ];
           await sheets.spreadsheets.values.append({
             spreadsheetId: sheetId,
-            range: "A:K",
+            range: "A:L",
             valueInputOption: "USER_ENTERED",
             requestBody: {values: [row]},
           });
