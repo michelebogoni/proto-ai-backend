@@ -33,8 +33,11 @@
     // Meta Instagram Ads
     if (/instagram|ig/.test(utmSource) && isPaid) return "Meta Instagram Ads";
 
-    // fbclid without paid UTM: organic Facebook
-    if (params.has("fbclid")) return "Meta Facebook";
+    // fbclid without paid UTM: distingui fb/ig dal referrer
+    if (params.has("fbclid")) {
+      if (/instagram\.com/i.test(referrerHost)) return "Meta Instagram";
+      return "Meta Facebook";
+    }
 
     // Organic search (referrer from search engine, no gclid)
     if (/google\./i.test(referrerHost)) return "Ricerca organica";
